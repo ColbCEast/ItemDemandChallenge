@@ -327,3 +327,83 @@ item2_forecast_plot <- arima_fullfit2 %>%
 
 class_plots_arima <- plotly::subplot(item1_cv_plot,item2_cv_plot,item1_forecast_plot,item2_forecast_plot, nrows = 2)
 class_plots_arima
+
+
+# Prophet Model
+
+train_data_item1 <- train_data %>%
+  filter(store == 2, item == 15)
+
+train_data_item2 <- train_data %>%
+  filter(store == 7, item == 34)
+
+test_data_item1 <- test_data %>%
+  filter(store == 2, item == 15)
+
+test_data_item2 <- test_data %>%
+  filter(store == 7, item == 34)
+
+cv_split1 <- time_series_split(train_data_item1, assess = "3 months", cumulative = TRUE)
+cv_split1 %>%
+  tk_time_series_cv_plan() %>%
+  plot_time_series_cv_plan(date, sales, .interactive = FALSE)
+
+cv_split2 <- time_series_split(train_data_item2, assess = "3 months", cumulative = TRUE)
+cv_split2 %>%
+  tk_time_series_cv_plan() %>%
+  plot_time_series_cv_plan(date, sales, .interactive = FALSE)
+
+prophet_model1 <- prophet_reg() %>%
+  set_engine(engine = "prophet") %>%
+  fit(sales ~ date, data = training(cv_split1))
+
+prophet_model2 <- prophet_reg() %>%
+  set_engine(engine = "prophet") %>%
+  fit(sales ~ date, data = training(cv_split2))
+
+cv_results1 <- modeltime_calibrate(prophet_model1,
+                                   new_data = testing(cv_split1))
+
+item1_cv_plot <- cv_results1 %>%
+  modeltime_forecast(
+    new_data = testing(cv_split1),
+    actual_data = train_data_item1
+  ) %>%
+  plot_modeltime_forecast(.interactive = TRUE)
+
+cv_results1 %>%
+  modeltime_accuracy() %>%
+  table_modeltime_accuracy(.interactive = FALSE)
+
+prophet_fullfit1 <- cv_results1 %>%
+  modeltime_refit(data = train_data_item1)
+
+item1_forecast_plot <- prophet_fullfit1 %>%
+  modeltime_forecast(new_data = test_data_item1,
+                     actual_data = train_data_item1) %>%
+  plot_modeltime_forecast(.interactive = FALSE)
+
+cv_results2 <- modeltime_calibrate(prophet_model2,
+                                   new_data = testing(cv_split2))
+
+item2_cv_plot <- cv_results2 %>%
+  modeltime_forecast(
+    new_data = testing(cv_split2),
+    actual_data = train_data_item2
+  ) %>%
+  plot_modeltime_forecast(.interactive = TRUE)
+
+cv_results2 %>%
+  modeltime_accuracy() %>%
+  table_modeltime_accuracy(.interactive = FALSE)
+
+prophet_fullfit2 <- cv_results2 %>%
+  modeltime_refit(data = train_data_item2)
+
+item2_forecast_plot <- prophet_fullfit2 %>%
+  modeltime_forecast(new_data = test_data_item2,
+                     actual_data = train_data_item2) %>%
+  plot_modeltime_forecast(.interactive = FALSE)
+
+class_plots_prophet <- plotly::subplot(item1_cv_plot,item2_cv_plot,item1_forecast_plot,item2_forecast_plot, nrows = 2)
+class_plots_prophet
