@@ -407,3 +407,105 @@ item2_forecast_plot <- prophet_fullfit2 %>%
 
 class_plots_prophet <- plotly::subplot(item1_cv_plot,item2_cv_plot,item1_forecast_plot,item2_forecast_plot, nrows = 2)
 class_plots_prophet
+
+preds <- prophet_fullfit1 %>%
+  modeltime_forecast(h = "3 months") %>%
+  rename(date = .index, sales = .value) %>%
+  select(date, sales) %>%
+  full_join(., y = test_data_item1, by = "date") %>%
+  select(id, sales)
+
+## Kaggle For-Loop (Prophet Model)
+
+nStores <- max(train$store)
+nItems <- max(train$items)
+
+for(s in 1:nStores){
+  for(i in 1:nItems){
+    # Set Up
+    storeItemTrain <- train %>%
+      filter(store == s, item == i)
+    storeItemTest <- test %>%
+      filter(store == s, item == i)
+    
+    # Fit store-item model
+    cv_split <- time_series_split(storeItemTrain, assess = "3 months", cumulative = TRUE)
+    
+    prophet_model <- prophet_reg() %>%
+      set_engine(engine = "prophet") %>%
+      fit(sales ~ date, data = train(cv_split))
+    
+    cv_results <- modeltime_calibrate(prophet_model,
+                                      new_data = testing(cv_split))
+    
+    prophet_fullfit <- cv_results %>%
+      modeltime_refit(data = storeItemTrain)
+    
+    # Predict store-item sales
+    preds <- prophet_fullfit %>%
+      modeltime_forecast(h = "3 months") %>%
+      rename(date = .index, sales = .value) %>%
+      select(date, sales) %>%
+      full_join(., y = storeItemTest, by = "date") %>%
+      select(id, sales)
+    
+    # Save predictions
+    if(s == 1 & i == 1){
+      all_preds <- preds
+    }else{
+      all_preds <- bind_rows(all_preds, preds)
+    }
+  }
+}
+
+vroom_write(x = all_preds, file = "./submission.csv", delim = ",")
+
+
+## Boosted Forest Model
+
+boosted_recipe <- recipe(sales~., data = train) %>%
+  step_date(date, features = c("dow", "month", "doy", "year")) %>%
+  step_mutate(weekend = ifelse(date_dow == c("Sat", "Sun"), 1, 0)) %>%
+  step_range(date_doy, min = 0, max = pi) %>%
+  step_mutate(doy_sin = sin(date_doy), doy_cos = cos(date_doy)) %>%
+  step_rm(date, item, store) %>%
+  step_normalize(all_numeric_predictors())
+
+boost_model <- boost_tree(tree_depth = 2,
+                          trees = 1000,
+                          learn_rate = 0.01) %>%
+  set_engine("lightgbm") %>%
+  set_mode("regression")
+
+boost_wf <- workflow() %>%
+  add_recipe(boosted_recipe) %>%
+  add_model(boost_model)
+
+for(s in 1:nStores){
+  for(i in 1:nItems){
+    # Set Up
+    storeItemTrain <- train %>%
+      filter(store == s, item == i)
+    storeItemTest <- test %>%
+      filter(store == s, item == i)
+    
+    # Fit store-item model
+    fit_wf <- boost_wf %>%
+      fit(data = train)
+    
+    # Predict store-item sales
+    preds <- predict(fit_wf, new_data = test) %>%
+      bind_cols(., test) %>%
+      rename(sales = .pred) %>%
+      select(id, sales)
+    
+    # Save predictions
+    if(s == 1 & i == 1){
+      all_preds <- preds
+    }else{
+      all_preds <- bind_rows(all_preds, preds)
+    }
+  }
+}
+
+vroom_write(x = all_preds, file = "./submission.csv", delim = ",")
